@@ -19,7 +19,11 @@ const DRAW_PILE_X_POSITION = 5;
 const DRAW_PILE_Y_POSITION = 5;
 const TABLEAU_PILE_X_POSITION = 40;
 const TABLEAU_PILE_Y_POSITION = 92;
-
+type ZoneType = keyof typeof ZONE_TYPE;
+const ZONE_TYPE = {
+  FOUNDATION: 'FOUNDATION',
+  TABLEAU: 'TABLEAU'
+} as const;
 
 export class GameScene extends Phaser.Scene {
   #drawPileCards!: Phaser.GameObjects.Image[];
@@ -38,6 +42,7 @@ export class GameScene extends Phaser.Scene {
     this.#createFoundationPiles();
     this.#createTableauPiles();
     this.#createDragEvents();
+    this.#createDropZones();
   }
 
   #createDrawPile(): void{
@@ -116,6 +121,7 @@ export class GameScene extends Phaser.Scene {
      this.#createDragStartEventListener();
      this.#createDragEventListener();
      this.#createDragEndEventListener();
+     this.#createDropEventListener();
 
   }
 
@@ -175,5 +181,47 @@ export class GameScene extends Phaser.Scene {
       return lastCardIndex - cardIndex;
     }
     return 0;
+  }
+
+  #createDropZones(): void{
+    let zone = this.add.zone(350, 0, 270, 85).setOrigin(0).setRectangleDropZone(270, 85).setData({
+      zoneType: ZONE_TYPE.FOUNDATION
+    })
+    if (DEBUG) {
+      this.add.rectangle(zone.x, zone.y, zone.width, zone.height, 0xff0000, 0.2).setOrigin(0);
+    }
+
+    for (let i = 0; i < 7; i += 1){
+      zone = this.add.zone(30 + i * 85, 92, 75.5, 585).setOrigin(0).setRectangleDropZone(75.5, 585).setData({
+      zoneType: ZONE_TYPE.TABLEAU,
+      tableauIndex: i,
+    }).setDepth(-1);
+    if (DEBUG) {
+      this.add.rectangle(zone.x, zone.y, zone.width, zone.height, 0xff0000, 0.5).setOrigin(0)
+    }
+    }
+  }
+
+  #createDropEventListener(): void {
+    this.input.on(Phaser.Input.Events.DROP, (pointer: Phaser.Input.Pointer, 
+      gameObject: Phaser.GameObjects.Image, 
+      dropZone: Phaser.GameObjects.Zone
+    ) => {
+      const zoneType = dropZone.getData('zoneType') as ZoneType;
+      if (zoneType == ZONE_TYPE.FOUNDATION) {
+        this.#handleMovecardToFoundation(gameObject);
+        return;
+      }
+      const tableauIndex = dropZone.getData('tableauIndex') as number;
+      this.#handleMoveCardTableau(gameObject, tableauIndex)
+    })
+  }
+
+  #handleMovecardToFoundation(gameObject: Phaser.GameObjects.Image): void{
+    console.log('placed card on foundation');
+  }
+
+  #handleMoveCardTableau(gameObject: Phaser.GameObjects.Image, targetTableauPileIndex: number): void{
+    console.log('placed card on tabluea pile', targetTableauPileIndex);
   }
 }
