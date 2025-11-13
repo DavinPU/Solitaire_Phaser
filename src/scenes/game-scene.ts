@@ -1,5 +1,8 @@
 import * as Phaser from 'phaser';
 import { ASSET_KEYS, CARD_HEIGHT, CARD_WIDTH, SCENE_KEYS } from './common';
+import { Solitaire } from '../lib/solitaire'
+import { Card } from '../lib/card';
+import { FoundationPile } from '../lib/foundation-pile';
 
 const DEBUG = true;
 const SCALE = 1.5;
@@ -26,9 +29,15 @@ const ZONE_TYPE = {
 } as const;
 
 export class GameScene extends Phaser.Scene {
+  // contains the core Solitaire game logic and has the actual game state
+  #solitaire!: Solitaire;
+  // keeps track of the card game objects in our draw pile (will have 3 game objects)
   #drawPileCards!: Phaser.GameObjects.Image[];
+  // keeps track of the card game objects in our discard pile (will have 2 game objects)
   #discardPileCards!: Phaser.GameObjects.Image[];
+  // keeps track of the card game objects in each of the foundation piles (4 game objects)
   #foundationPileCards!: Phaser.GameObjects.Image[];
+  // keeps track of the card game object containers for each tableau pile (7 game objects)
   #tableauContainers!: Phaser.GameObjects.Container[];
 
 
@@ -37,12 +46,16 @@ export class GameScene extends Phaser.Scene {
   }
 
   public create(): void {
-    this.#createDrawPile();
+    this.#solitaire = new Solitaire();
+    this.#solitaire.newGame();
+
     this.#createDiscardPile();
+    this.#createDrawPile();
     this.#createFoundationPiles();
     this.#createTableauPiles();
     this.#createDragEvents();
     this.#createDropZones();
+    
   }
 
   #createDrawPile(): void{
@@ -54,9 +67,23 @@ export class GameScene extends Phaser.Scene {
 
     const drawZone = this.add.zone(0, 0, CARD_WIDTH * SCALE + 20, CARD_HEIGHT * SCALE + 12).setOrigin(0).setInteractive();
     drawZone.on(Phaser.Input.Events.POINTER_DOWN, () => {
+      if (this.#solitaire.drawPile.length === 0 && this.#solitaire.discardPile.length === 0) {
+        return;
+      }
+
+      if (this.#solitaire.drawPile.length === 0) {
+        this.#solitaire.shuffleDiscardPile();
+        this.#discardPileCards.forEach((card) => card.setVisible(false));
+        this.#showCardsInDrawPile();
+        return;
+      }
+      
+      this.#solitaire.drawCard();
+      this.#showCardsInDrawPile();
       this.#discardPileCards[0].setFrame(this.#discardPileCards[1].frame).setVisible(this.#discardPileCards[1].visible);
-      this.#discardPileCards[1].setFrame(CARD_BACK_FRAME).setVisible(true);
-    });
+      const card = this.#solitaire.discardPile[this.#solitaire.discardPile.length - 1];
+      this.#discardPileCards[1].setFrame(this.#getCardFrame(card)).setVisible(true);
+    });  
 
     if (DEBUG) {
       this.add.rectangle(drawZone.x, drawZone.y, drawZone.width, drawZone.height, 0xff0000, 0.5).setOrigin(0);
@@ -104,17 +131,21 @@ export class GameScene extends Phaser.Scene {
 
   #createTableauPiles(): void{
     this.#tableauContainers = [];
-    for (let i = 0; i < 7; i += 1) {
-      const x = TABLEAU_PILE_X_POSITION + i * 85;
+
+    this.#solitaire.tableauPiles.forEach((pile, pileIndex) => {
+      const x = TABLEAU_PILE_X_POSITION + pileIndex * 85;
       const tableauContainer = this.add.container(x, TABLEAU_PILE_Y_POSITION, []);
       this.#tableauContainers.push(tableauContainer);
 
-      for (let j = 0; j< i + 1; j += 1) {
-        const cardGameObject = this.#createCard(0, j * 20, true, j, i);
+      pile.forEach((card, cardIndex) => {
+        const cardGameObject = this.#createCard(0, cardIndex * 20, false, cardIndex, pileIndex);
         tableauContainer.add(cardGameObject)
-      }
-      
-    }
+        if (card.isFaceUp) {
+          this.input.setDraggable(cardGameObject);
+          cardGameObject.setFrame(this.#getCardFrame(card))
+        }
+      });
+    });
   }
 
   #createDragEvents(): void{
@@ -161,17 +192,21 @@ export class GameScene extends Phaser.Scene {
       } else {
         gameObject.setDepth(0);
       }
-      gameObject.setAlpha(1);
-      gameObject.setPosition(gameObject.getData('x') as number, gameObject.getData('y') as number)
 
-      const cardIndex = gameObject.getData('cardIndex') as number;
-      if (tableauPileIndex !== undefined) {
-        const numberOfCardsToMove = this.#getNumberOfCardsToMoveAsPartOfStack(tableauPileIndex, cardIndex);
-        for (let i = 1; i <= numberOfCardsToMove; i+=1) {
-          const cardToMove = this.#tableauContainers[tableauPileIndex].getAt<Phaser.GameObjects.Image>(cardIndex + i);
-          cardToMove.setPosition(cardToMove.getData('x') as number, cardToMove.getData('y') as number);
+      if (gameObject.active) {
+        gameObject.setAlpha(1);
+        gameObject.setPosition(gameObject.getData('x') as number, gameObject.getData('y') as number)
+
+        const cardIndex = gameObject.getData('cardIndex') as number;
+        if (tableauPileIndex !== undefined) {
+          const numberOfCardsToMove = this.#getNumberOfCardsToMoveAsPartOfStack(tableauPileIndex, cardIndex);
+          for (let i = 1; i <= numberOfCardsToMove; i+=1) {
+            const cardToMove = this.#tableauContainers[tableauPileIndex].getAt<Phaser.GameObjects.Image>(cardIndex + i);
+            cardToMove.setPosition(cardToMove.getData('x') as number, cardToMove.getData('y') as number);
+          }
         }
       }
+      
     })
   }
 
@@ -218,10 +253,105 @@ export class GameScene extends Phaser.Scene {
   }
 
   #handleMovecardToFoundation(gameObject: Phaser.GameObjects.Image): void{
-    console.log('placed card on foundation');
+    let isValidMove = false;
+    let isCardFromDiscardPile = false;
+
+    const tableauPileIndex = gameObject.getData('pileIndex') as number | undefined;
+    if (tableauPileIndex === undefined) {
+      isValidMove = this.#solitaire.playDiscardPileToFoundation();
+      isCardFromDiscardPile = true;
+    } else {
+      isValidMove = this.#solitaire.moveTableauCardToFoundation(tableauPileIndex);
+      isCardFromDiscardPile = false;
+    }
+
+    if (!isValidMove) {
+      return;
+    }
+
+    if (isCardFromDiscardPile) {
+      this.#updateCardGameObjectsInDiscardPile();
+    } else {
+      this.#handleRevealingNewTableauCards(tableauPileIndex as number)
+    }
+
+    if (!isCardFromDiscardPile) {
+      gameObject.destroy();
+    }
+
+    this.#updateFoundationPiles();
   }
 
   #handleMoveCardTableau(gameObject: Phaser.GameObjects.Image, targetTableauPileIndex: number): void{
-    console.log('placed card on tabluea pile', targetTableauPileIndex);
+    let isValidMove = false;
+    let isCardFromDiscardPile = false;
+
+    const originalTargetPileSize = this.#tableauContainers[targetTableauPileIndex].length;
+
+    const tableauPileIndex = gameObject.getData('pileIndex') as number | undefined;
+    const tableauCardIndex = gameObject.getData('cardIndex') as number
+    if (tableauPileIndex === undefined) {
+      isValidMove = this.#solitaire.playDiscardPileCardToTableau(targetTableauPileIndex);
+      isCardFromDiscardPile = true;
+    } else {
+      isValidMove = this.#solitaire.moveTableauCardsToAnotherTableau(tableauPileIndex, tableauCardIndex, targetTableauPileIndex);
+      isCardFromDiscardPile = false;
+    }
+
+    if (!isValidMove) {
+      return;
+    }
+
+    if (isCardFromDiscardPile) {
+      const card = this.#createCard(0, originalTargetPileSize * 20, true, originalTargetPileSize, targetTableauPileIndex);
+      card.setFrame(gameObject.frame);
+      this.#tableauContainers[targetTableauPileIndex].add(card);
+      this.#updateCardGameObjectsInDiscardPile();
+      return;
+    }
+
+    const numberOfCardsToMove = this.#getNumberOfCardsToMoveAsPartOfStack(tableauPileIndex as number, tableauCardIndex);
+    for (let i = 0; i <= numberOfCardsToMove; i += 1) {
+      const cardGameObject = this.#tableauContainers[tableauPileIndex as number].getAt<Phaser.GameObjects.Image>(tableauCardIndex);
+      this.#tableauContainers[tableauPileIndex as number].removeAt(tableauCardIndex);
+      this.#tableauContainers[targetTableauPileIndex].add(cardGameObject);
+
+      const cardIndex = originalTargetPileSize + i;
+      cardGameObject.setData({
+        x: 0,
+        y: cardIndex * 20,
+        cardIndex,
+        pileIndex: targetTableauPileIndex
+      })
+    }
+
+    this.#tableauContainers[tableauPileIndex as number].setDepth(0);
+    this.#handleRevealingNewTableauCards(tableauPileIndex as number);
+  }
+
+  #updateCardGameObjectsInDiscardPile(): void{
+    this.#discardPileCards[1].setFrame(this.#discardPileCards[0].frame).setVisible(this.#discardPileCards[0].visible);
+    this.#discardPileCards[0].setVisible(false);
+  }
+
+  #handleRevealingNewTableauCards(tableauPileIndex: number): void {
+//
+  }
+
+  #updateFoundationPiles(): void {
+//
+  }
+
+  #showCardsInDrawPile(): void { 
+    const numberOfCardsToShow = Math.min(this.#solitaire.drawPile.length, 3);
+    this.#drawPileCards.forEach((card, cardIndex) => {
+      const showCard = cardIndex < numberOfCardsToShow;
+      card.setVisible(showCard);
+    });
+  }
+
+  #getCardFrame(data: Card | FoundationPile): number {
+    return SUIT_FRAMES[data.suit] + data.value - 1;
+
   }
 }
