@@ -331,15 +331,32 @@ export class GameScene extends Phaser.Scene {
 
   #updateCardGameObjectsInDiscardPile(): void{
     this.#discardPileCards[1].setFrame(this.#discardPileCards[0].frame).setVisible(this.#discardPileCards[0].visible);
-    this.#discardPileCards[0].setVisible(false);
+    const discardPileCard = this.#solitaire.discardPile[this.#solitaire.discardPile.length - 2];
+    if (discardPileCard === undefined) {
+        this.#discardPileCards[0].setVisible(false);
+    } else {
+        this.#discardPileCards[0].setVisible(true).setFrame(this.#getCardFrame(discardPileCard))
+    }
   }
 
   #handleRevealingNewTableauCards(tableauPileIndex: number): void {
-//
+    const flipTableauCard = this.#solitaire.flipTopTableauCard(tableauPileIndex);
+    if (flipTableauCard) {
+        const tableauPile = this.#solitaire.tableauPiles[tableauPileIndex];
+        const tableauCard = tableauPile.length -= 1;
+        const cardGameObject = this.#tableauContainers[tableauPileIndex].getAt<Phaser.GameObjects.Image>(tableauPile.length - 1);
+        cardGameObject.setFrame(this.#getCardFrame(tableauCard));
+        this.input.setDraggable(cardGameObject);
+    }
   }
 
   #updateFoundationPiles(): void {
-//
+    this.#solitaire.foundationPiles.forEach((pile: FoundationPile, pileIndex: number) => {
+        if (pile.value === 0) {
+            return;
+            }
+        this.#foundationPileCards[pileIndex].setVisible(true).setFrame(this.#getCardFrame(pile));
+    });
   }
 
   #showCardsInDrawPile(): void { 
